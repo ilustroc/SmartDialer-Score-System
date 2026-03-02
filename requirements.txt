@@ -1,0 +1,5 @@
+pandas==2.1.0
+sqlalchemy==2.0.20
+pymysql==1.1.0
+openpyxl==3.1.2
+cryptography==41.0.3
