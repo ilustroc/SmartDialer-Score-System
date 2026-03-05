@@ -8,13 +8,18 @@ load_dotenv()
 
 def get_db_connection():
     user = os.getenv('DB_USER')
-    password = os.getenv('DB_PASSWORD')
+    # CAMBIO: Usar DB_PASS para que sea igual al .env
+    password = os.getenv('DB_PASS') 
     host = os.getenv('DB_HOST')
     db = os.getenv('DB_NAME')
     
-    # IMPORTANTE: Encode de la contraseña para manejar el '@' y el '!'
-    safe_password = urllib.parse.quote_plus(password)
+    # Verificación de que la contraseña no llegue vacía
+    if not password:
+        raise ValueError("❌ No se encontró la contraseña. Revisa que DB_PASS esté en tu .env")
     
-    # Construcción de la URL con la contraseña codificada
+    # Codificar caracteres especiales como '@' y '!'
+    safe_password = urllib.parse.quote_plus(str(password))
+    
+    # Construcción de la URL
     conn_str = f'mysql+pymysql://{user}:{safe_password}@{host}/{db}'
     return create_engine(conn_str)
