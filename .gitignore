@@ -3,4 +3,4 @@ venv/
 .venv/
 
 data/raw/**
-data/out/**
+data/output/**

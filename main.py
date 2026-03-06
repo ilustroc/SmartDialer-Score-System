@@ -34,13 +34,8 @@ def ejecutar_ranking_ia():
         df_universo = pd.merge(df_universo, df_tels_gestion, on=['DNI', 'Telefono'], how='outer')
 
     # 4. FILTRADO: Blacklist + Teléfono igual a DNI
-    # Primero: Quitar duplicados de DNI y Teléfono por si acaso
     df_universo = df_universo.drop_duplicates(subset=['DNI', 'Telefono'])
-    
-    # Segundo: Omitir si Telefono == DNI (Convertimos ambos a str para comparar exactitud)
     df_universo = df_universo[df_universo['Telefono'].astype(str) != df_universo['DNI'].astype(str)].copy()
-
-    # Tercero: Filtrar Blacklist
     df_universo = pd.merge(df_universo, df_black[['DNI', 'Telefono', 'Motivo']], on=['DNI', 'Telefono'], how='left')
     df_universo = df_universo[df_universo['Motivo'].isna()].copy()
 
@@ -70,7 +65,6 @@ def ejecutar_ranking_ia():
             
             df_scored = pd.merge(df_scored, ultima_gestion_exito, on=['DNI', 'Telefono'], how='left')
             
-            # Aplicamos bonos
             df_scored.loc[df_scored['mejor_resultado'] == 'CONTACTO DIRECTO', 'total_score'] += 100.0
             df_scored.loc[df_scored['mejor_resultado'] == 'CONTACTO INDIRECTO', 'total_score'] += 50.0
 
@@ -81,7 +75,8 @@ def ejecutar_ranking_ia():
     df_descartados['MOTIVO'] = 'Exceso de gestiones negativas reincidentes'
     
     if not df_descartados.empty:
-        df_descartados['DNI'] = df_descartados['DNI'].astype(int)
+        # Formatear DNI para el Excel de descartados también
+        df_descartados['DNI'] = df_descartados['DNI'].apply(lambda x: str(int(x)).zfill(8))
         df_descartados[['DNI', 'Telefono', 'MOTIVO']].to_excel('data/output/telefonos_descartados.xlsx', index=False)
         print(f">>> {len(df_descartados)} teléfonos movidos a lista de descartados.")
 
@@ -89,7 +84,7 @@ def ejecutar_ranking_ia():
     df_scored_final = df_scored[~mask_descarte].copy()
 
     # 10. Ordenamiento y Salida
-    # Usamos .get() por si no existe la columna ultima_fecha_exito (en caso de que no haya éxitos en el historial)
+    # CORRECCIÓN: Usamos df_scored_final para la lógica de columnas
     col_fecha = 'ultima_fecha_exito' if 'ultima_fecha_exito' in df_scored_final.columns else 'total_score'
     
     df_sorted = df_scored_final.sort_values(
@@ -99,15 +94,23 @@ def ejecutar_ranking_ia():
     
     df_top3 = df_sorted.groupby('DNI').head(3).copy()
 
-    print("Generando lista_final_horizontal.csv...")
+    print("Generando lista_final_horizontal.csv con formato de texto...")
     with open('data/output/lista_final_horizontal.csv', 'w') as f:
-        f.write("DNI,Telefono_1,Telefono_2,Telefono_3\n")
+        # Encabezado con comillas y punto y coma
+        f.write('"DNI";"Telefono_1";"Telefono_2";"Telefono_3"\n')
+        
         for dni, grupo in df_top3.groupby('DNI'):
-            tels = [str(t) for t in grupo['Telefono'].tolist() if pd.notnull(t) and str(t) != '']
-            if tels:
-                f.write(f"{int(dni)}," + ",".join(tels) + "\n")
+            dni_str = str(int(dni)).zfill(8)
+            tels = [str(t).strip() for t in grupo['Telefono'].tolist() if pd.notnull(t) and str(t) != '']
+            
+            while len(tels) < 3:
+                tels.append("")
+            
+            linea = f'"{dni_str}";"{tels[0]}";"{tels[1]}";"{tels[2]}"\n'
+            f.write(linea)
 
-    df_sorted['DNI'] = df_sorted['DNI'].astype(int)
+    # Explicación con DNI formateado
+    df_sorted['DNI'] = df_sorted['DNI'].apply(lambda x: str(int(x)).zfill(8))
     df_sorted.to_csv('data/output/explicacion_score.csv', index=False)
     print(">>> Proceso terminado con éxito.")
 
