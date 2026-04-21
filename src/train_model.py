@@ -160,6 +160,8 @@ def entrenar_modelo():
     path_blacklist = 'data/raw/blacklist_telefonos.xlsx'
     output_model = 'data/output/modelo_contactabilidad.pkl'
 
+    os.makedirs(os.path.dirname(output_model), exist_ok=True)
+
     # 1. Cargar archivos
     df_gestiones = pd.read_csv(path_gestiones, dtype={'Telefono': str, 'DNI': str})
     df_opsitel = pd.read_excel(path_opsitel)
