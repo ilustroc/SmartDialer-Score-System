@@ -1,4 +1,4 @@
-SmartDialer Score System (ML Edition) 🚀
+SmartDialer Score System (ML Edition)
 Este sistema procesa universos de datos de cobranzas (hasta 3.5M de registros) para priorizar los mejores teléfonos de contacto por cliente utilizando un modelo de Machine Learning (Random Forest).
 
 🛠️ Estructura del Proyecto
@@ -30,7 +30,28 @@ Modelo ML: Calcula la probabilidad de éxito basándose en patrones de "Contacto
 
 Penalización Dura: Si un teléfono registra 3 o más fallos críticos (Nro. No pertenece, Apagado, etc.) en el historial, su score se reduce automáticamente a 0.0.
 
-🚀 Guía de Uso
+🔢 Orden de los Teléfonos
+El archivo lista_final_horizontal.csv se organiza por DNI y muestra hasta 3 teléfonos priorizados por cliente:
+
+Telefono_1: Es el mejor teléfono disponible para llamar.
+
+Telefono_2: Es el segundo mejor teléfono.
+
+Telefono_3: Es el tercer mejor teléfono.
+
+Antes de ordenar, el sistema elimina teléfonos duplicados, teléfonos iguales al DNI, números inválidos según reglas de telefonía peruana, teléfonos incluidos en la blacklist y teléfonos con 3 o más fallos críticos sin contacto exitoso.
+
+El orden se calcula así:
+
+1. Primero se ordena por DNI.
+2. Dentro de cada DNI, los teléfonos se ordenan por total_score de mayor a menor.
+3. El total_score viene del modelo de IA y se refuerza con el historial: CONTACTO DIRECTO suma más prioridad que CONTACTO INDIRECTO.
+4. Si hay teléfonos con contacto exitoso, se prioriza el éxito más reciente usando ultima_fecha_exito.
+5. Finalmente se toman los primeros 3 teléfonos de cada DNI y se colocan en Telefono_1, Telefono_2 y Telefono_3.
+
+Si un DNI tiene menos de 3 teléfonos válidos, las columnas restantes salen vacías.
+
+Guía de Uso
 
 Paso 1: Actualizar Datos
 Si la base en MySQL cambió, actualiza el archivo temporal local:
