@@ -7,9 +7,9 @@ from src.logic import (
     limpiar_tel,
     limpiar_dni,
     validar_telefono_peru,
-    obtener_columna_resultado,
-    normalizar_texto,
+    construir_resumen_contactabilidad,
 )
+
 
 def ejecutar_ranking_ia():
     print(">>> Iniciando SmartDialer Engine (Limpieza de Negativos)...")
@@ -35,7 +35,7 @@ def ejecutar_ranking_ia():
     # 2. Cargar historial
     df_historial = None
     if os.path.exists(temp_csv):
-        df_historial = pd.read_csv(temp_csv, dtype={'Telefono': str, 'DNI': str})
+        df_historial = pd.read_csv(temp_csv, dtype={'Telefono': str, 'DNI': str}, low_memory=False)
         df_historial['Telefono'] = limpiar_tel(df_historial['Telefono'])
         df_historial['DNI'] = limpiar_dni(df_historial['DNI'])
 
@@ -64,7 +64,7 @@ def ejecutar_ranking_ia():
         df_universo['Telefono'].astype(str) != df_universo['DNI'].astype(str)
     ].copy()
 
-    print(">>> Validando estructura de números y prefijos regionales...")
+    print(">>> Validando estructura de numeros y prefijos regionales...")
     mask_validos = df_universo.apply(validar_telefono_peru, axis=1)
     df_universo = df_universo[mask_validos].copy()
 
@@ -90,88 +90,78 @@ def ejecutar_ranking_ia():
         fecha_referencia=fecha_referencia
     )
 
-    # 6. Procesar fallos y éxitos históricos
+    # 6. Procesar fallos, contactos y promesas historicas
     if df_historial is not None and not df_historial.empty:
-        if 'Resultado_Gestion' in df_historial.columns:
-            df_historial['Resultado_Gestion_norm'] = normalizar_texto(df_historial['Resultado_Gestion'])
-        else:
-            df_historial['Resultado_Gestion_norm'] = ''
-
-        col_resultado = obtener_columna_resultado(df_historial)
-        if col_resultado is not None:
-            df_historial['resultado_norm'] = normalizar_texto(df_historial[col_resultado])
-        else:
-            df_historial['resultado_norm'] = ''
-
-        negativos = ['NRO. NO PERTENECE', 'TELEFONO APAGADO', 'FDS/NE', 'FAILED', 'IVR FALLIDA']
-        df_historial['es_fallo'] = df_historial['Resultado_Gestion_norm'].isin(negativos).astype(int)
-
-        stats_fallos = df_historial.groupby(['DNI', 'Telefono']).agg(
-            total_fallos=('es_fallo', 'sum'),
-            ultima_fecha_fallo=('Fecha_de_gestion', 'max')
-        ).reset_index()
-
+        resumen_contactabilidad = construir_resumen_contactabilidad(df_historial)
         df_scored = pd.merge(
             df_scored,
-            stats_fallos,
+            resumen_contactabilidad,
             on=['DNI', 'Telefono'],
             how='left'
         )
 
-        df_scored['total_fallos'] = df_scored['total_fallos'].fillna(0)
-        df_scored['ultima_fecha_fallo'] = pd.to_datetime(df_scored['ultima_fecha_fallo'], errors='coerce')
+        for col in ['total_fallos', 'fallos_posteriores_proteccion']:
+            df_scored[col] = df_scored[col].fillna(0).astype(int)
 
-        exitosos = df_historial[
-            df_historial['resultado_norm'].isin(['CONTACTO DIRECTO', 'CONTACTO INDIRECTO'])
-        ].copy()
+        for col in [
+            'ultima_fecha_fallo',
+            'ultima_fecha_fallo_posterior',
+            'ultima_fecha_exito',
+            'ultima_fecha_promesa',
+            'fecha_ultima_proteccion',
+        ]:
+            df_scored[col] = pd.to_datetime(df_scored[col], errors='coerce')
 
-        if not exitosos.empty:
-            exitosos = exitosos.sort_values('Fecha_de_gestion', ascending=False)
+        df_scored['mejor_resultado'] = df_scored['mejor_resultado'].fillna('')
+        df_scored['motivo_proteccion'] = df_scored['motivo_proteccion'].fillna('')
+        df_scored['tiene_promesa'] = df_scored['tiene_promesa'].astype('boolean').fillna(False).astype(bool)
 
-            ultima_gestion_exito = exitosos.groupby(['DNI', 'Telefono']).agg(
-                ultima_fecha_exito=('Fecha_de_gestion', 'max'),
-                mejor_resultado=('resultado_norm', 'first')
-            ).reset_index()
+        mask_promesa = df_scored['tiene_promesa']
+        mask_cd = (~mask_promesa) & (df_scored['mejor_resultado'] == 'CONTACTO DIRECTO')
+        mask_ci = (~mask_promesa) & (df_scored['mejor_resultado'] == 'CONTACTO INDIRECTO')
 
-            df_scored = pd.merge(
-                df_scored,
-                ultima_gestion_exito,
-                on=['DNI', 'Telefono'],
-                how='left'
-            )
-
-            df_scored.loc[df_scored['mejor_resultado'] == 'CONTACTO DIRECTO', 'total_score'] += 100.0
-            df_scored.loc[df_scored['mejor_resultado'] == 'CONTACTO INDIRECTO', 'total_score'] += 50.0
-        else:
-            df_scored['ultima_fecha_exito'] = pd.NaT
-            df_scored['mejor_resultado'] = None
+        df_scored.loc[mask_promesa, 'total_score'] += 150.0
+        df_scored.loc[mask_cd, 'total_score'] += 100.0
+        df_scored.loc[mask_ci, 'total_score'] += 50.0
     else:
         df_scored['total_fallos'] = 0
+        df_scored['fallos_posteriores_proteccion'] = 0
         df_scored['ultima_fecha_fallo'] = pd.NaT
+        df_scored['ultima_fecha_fallo_posterior'] = pd.NaT
         df_scored['ultima_fecha_exito'] = pd.NaT
-        df_scored['mejor_resultado'] = None
+        df_scored['ultima_fecha_promesa'] = pd.NaT
+        df_scored['fecha_ultima_proteccion'] = pd.NaT
+        df_scored['mejor_resultado'] = ''
+        df_scored['motivo_proteccion'] = ''
+        df_scored['tiene_promesa'] = False
 
-    # 7. Identificar y exportar números descartados
-    mask_descarte = (
-        (df_scored['total_fallos'] >= 3) &
-        (df_scored['ultima_fecha_exito'].isnull())
-    )
+    # 7. Identificar y exportar numeros descartados
+    mask_descarte = df_scored['fallos_posteriores_proteccion'] >= 3
 
     df_descartados = df_scored[mask_descarte].copy()
-    df_descartados['MOTIVO'] = 'Exceso de gestiones negativas reincidentes'
+    df_descartados['MOTIVO'] = '3+ fallos criticos posteriores al ultimo contacto/promesa'
 
     if not df_descartados.empty:
         df_descartados['DNI'] = df_descartados['DNI'].apply(lambda x: str(int(x)).zfill(8))
-        df_descartados[['DNI', 'Telefono', 'MOTIVO']].to_excel(
+        df_descartados[[
+            'DNI',
+            'Telefono',
+            'MOTIVO',
+            'fallos_posteriores_proteccion',
+            'ultima_fecha_fallo_posterior',
+            'fecha_ultima_proteccion',
+            'mejor_resultado',
+            'motivo_proteccion',
+        ]].to_excel(
             'data/output/telefonos_descartados.xlsx',
             index=False
         )
-        print(f">>> {len(df_descartados)} teléfonos movidos a lista de descartados por reincidencia.")
+        print(f">>> {len(df_descartados)} telefonos movidos a lista de descartados por reincidencia.")
 
     # 8. Filtrar salida final
     df_scored_final = df_scored[~mask_descarte].copy()
 
-    col_fecha = 'ultima_fecha_exito' if 'ultima_fecha_exito' in df_scored_final.columns else 'total_score'
+    col_fecha = 'fecha_ultima_proteccion' if 'fecha_ultima_proteccion' in df_scored_final.columns else 'total_score'
 
     df_sorted = df_scored_final.sort_values(
         by=['DNI', 'total_score', col_fecha],
@@ -194,11 +184,11 @@ def ejecutar_ranking_ia():
 
             f.write(f'"{dni_str}";"{tels[0]}";"{tels[1]}";"{tels[2]}"\n')
 
-    # 10. Exportar explicación
+    # 10. Exportar explicacion
     df_sorted['DNI'] = df_sorted['DNI'].apply(lambda x: str(int(x)).zfill(8))
     df_sorted.to_csv('data/output/explicacion_score.csv', index=False, encoding='utf-8-sig')
 
-    print(">>> Proceso terminado con éxito.")
+    print(">>> Proceso terminado con exito.")
 
 
 if __name__ == "__main__":

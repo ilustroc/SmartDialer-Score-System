@@ -28,7 +28,7 @@ Blacklist: Los números en esta lista son eliminados del universo antes de calif
 
 Modelo ML: Calcula la probabilidad de éxito basándose en patrones de "Contacto Directo".
 
-Penalización Dura: Si un teléfono registra 3 o más fallos críticos (Nro. No pertenece, Apagado, etc.) en el historial, su score se reduce automáticamente a 0.0.
+Penalización temporal: Un teléfono solo se descarta si registra 3 o más fallos críticos después del último contacto válido o promesa. Si antes tuvo FAILED, Apagado u otro negativo, pero luego tuvo CONTACTO DIRECTO, CONTACTO INDIRECTO o Compromiso de pago, el conteo de fallos se reinicia desde esa fecha y el teléfono se conserva.
 
 🔢 Orden de los Teléfonos
 El archivo lista_final_horizontal.csv se organiza por DNI y muestra hasta 3 teléfonos priorizados por cliente:
@@ -39,14 +39,14 @@ Telefono_2: Es el segundo mejor teléfono.
 
 Telefono_3: Es el tercer mejor teléfono.
 
-Antes de ordenar, el sistema elimina teléfonos duplicados, teléfonos iguales al DNI, números inválidos según reglas de telefonía peruana, teléfonos incluidos en la blacklist y teléfonos con 3 o más fallos críticos sin contacto exitoso.
+Antes de ordenar, el sistema elimina teléfonos duplicados, teléfonos iguales al DNI, números inválidos según reglas de telefonía peruana, teléfonos incluidos en la blacklist y teléfonos con 3 o más fallos críticos posteriores al último contacto/promesa.
 
 El orden se calcula así:
 
 1. Primero se ordena por DNI.
 2. Dentro de cada DNI, los teléfonos se ordenan por total_score de mayor a menor.
-3. El total_score viene del modelo de IA y se refuerza con el historial: CONTACTO DIRECTO suma más prioridad que CONTACTO INDIRECTO.
-4. Si hay teléfonos con contacto exitoso, se prioriza el éxito más reciente usando ultima_fecha_exito.
+3. El total_score viene del modelo de IA y se refuerza con el historial: Compromiso de pago tiene mayor prioridad, luego CONTACTO DIRECTO y luego CONTACTO INDIRECTO.
+4. Si hay teléfonos con contacto exitoso o promesa, se prioriza el evento positivo más reciente usando fecha_ultima_proteccion.
 5. Finalmente se toman los primeros 3 teléfonos de cada DNI y se colocan en Telefono_1, Telefono_2 y Telefono_3.
 
 Si un DNI tiene menos de 3 teléfonos válidos, las columnas restantes salen vacías.

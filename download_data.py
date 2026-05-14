@@ -8,15 +8,28 @@ def descargar_gestiones():
     print(">>> Iniciando descarga de gestiones a ALTA VELOCIDAD...")
 
     temp_csv = "data/raw/temp_base_completa.csv"
+    staging_csv = f"{temp_csv}.new"
     os.makedirs(os.path.dirname(temp_csv), exist_ok=True)
 
-    if os.path.exists(temp_csv):
-        os.remove(temp_csv)
+    if os.path.exists(staging_csv):
+        os.remove(staging_csv)
 
     query = text("""
-        SELECT DNI, Telefono, Resultado_Gestion, Fecha_de_gestion, resultado
+        SELECT
+            DNI,
+            Telefono,
+            Resultado_Gestion,
+            Fecha_de_gestion,
+            resultado,
+            monto_promesa,
+            fecha_promesa
         FROM vw_gestiones_unificadas
         WHERE Fecha_de_gestion >= DATE_SUB(NOW(), INTERVAL 6 MONTH)
+           OR fecha_promesa >= DATE_FORMAT(CURDATE(), '%Y-%m-01')
+           OR (
+                resultado IN ('CONTACTO DIRECTO', 'CONTACTO INDIRECTO')
+                AND Fecha_de_gestion >= DATE_SUB(NOW(), INTERVAL 12 MONTH)
+           )
     """)
 
     engine = None
@@ -34,7 +47,7 @@ def descargar_gestiones():
                 header = primer_bloque
 
                 chunk.to_csv(
-                    temp_csv,
+                    staging_csv,
                     mode=modo,
                     index=False,
                     header=header,
@@ -46,11 +59,16 @@ def descargar_gestiones():
                 primer_bloque = False
 
         if total_registros == 0:
+            if os.path.exists(staging_csv):
+                os.remove(staging_csv)
             print("⚠️ La consulta no devolvió registros.")
         else:
+            os.replace(staging_csv, temp_csv)
             print(f">>> DESCARGA EXITOSA. Total: {total_registros} registros en {temp_csv}")
 
     except Exception as e:
+        if os.path.exists(staging_csv):
+            os.remove(staging_csv)
         print(f"❌ Error crítico en la descarga: {e}")
 
     finally:

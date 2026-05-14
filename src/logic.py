@@ -18,6 +18,25 @@ NEGATIVOS_DETALLE = {
     'CORTAN LA LLAMADA'
 }
 
+NEGATIVOS_CRITICOS_DESCARTE = {
+    'NRO. NO PERTENECE',
+    'TELEFONO APAGADO',
+    'FDS/NE',
+    'FAILED',
+    'IVR FALLIDA',
+}
+
+RESULTADOS_CONTACTO_VALIDO = {
+    'CONTACTO DIRECTO',
+    'CONTACTO INDIRECTO',
+}
+
+DETALLES_PROMESA = {
+    'COMPROMISO DE PAGO',
+    'PROMESA DE PAGO',
+    'CANCELO DEUDA',
+}
+
 FEATURE_COLS_MODELO = [
     'feature_opsitel',
     'feature_antiguedad_meses',
@@ -60,6 +79,171 @@ def obtener_columna_resultado(df):
     if 'Resultado_Gestion' in df.columns:
         return 'Resultado_Gestion'
     return None
+
+
+def construir_resumen_contactabilidad(df_historial):
+    """
+    Resume fallos, contactos y promesas por (DNI, Telefono).
+
+    La regla de descarte usa solo fallos criticos posteriores al ultimo
+    contacto/promesa para no castigar telefonos recuperados por una gestion
+    positiva reciente.
+    """
+    cols_salida = [
+        'DNI',
+        'Telefono',
+        'total_fallos',
+        'fallos_posteriores_proteccion',
+        'ultima_fecha_fallo',
+        'ultima_fecha_fallo_posterior',
+        'ultima_fecha_exito',
+        'ultima_fecha_promesa',
+        'fecha_ultima_proteccion',
+        'mejor_resultado',
+        'motivo_proteccion',
+        'tiene_promesa',
+    ]
+
+    if df_historial is None or df_historial.empty:
+        return pd.DataFrame(columns=cols_salida)
+
+    if 'DNI' not in df_historial.columns or 'Telefono' not in df_historial.columns:
+        return pd.DataFrame(columns=cols_salida)
+
+    df = df_historial.copy()
+    df['Telefono'] = limpiar_tel(df['Telefono'])
+    df['DNI'] = limpiar_dni(df['DNI'])
+
+    if 'Fecha_de_gestion' in df.columns:
+        df['Fecha_de_gestion'] = pd.to_datetime(df['Fecha_de_gestion'], errors='coerce')
+    else:
+        df['Fecha_de_gestion'] = pd.NaT
+
+    if 'Resultado_Gestion' in df.columns:
+        df['Resultado_Gestion_norm'] = normalizar_texto(df['Resultado_Gestion'])
+    else:
+        df['Resultado_Gestion_norm'] = ''
+
+    col_resultado = obtener_columna_resultado(df)
+    if col_resultado is not None:
+        df['resultado_norm'] = normalizar_texto(df[col_resultado])
+    else:
+        df['resultado_norm'] = ''
+
+    if 'fecha_promesa' in df.columns:
+        df['fecha_promesa_norm'] = pd.to_datetime(df['fecha_promesa'], errors='coerce')
+    else:
+        df['fecha_promesa_norm'] = pd.NaT
+
+    if 'monto_promesa' in df.columns:
+        df['monto_promesa_num'] = pd.to_numeric(df['monto_promesa'], errors='coerce').fillna(0)
+    else:
+        df['monto_promesa_num'] = 0
+
+    df['es_fallo'] = df['Resultado_Gestion_norm'].isin(NEGATIVOS_CRITICOS_DESCARTE)
+    df['es_promesa'] = (
+        df['Resultado_Gestion_norm'].isin(DETALLES_PROMESA) |
+        df['Resultado_Gestion_norm'].str.contains('COMPROMISO|PROMESA', regex=True, na=False) |
+        df['fecha_promesa_norm'].notna() |
+        (df['monto_promesa_num'] > 0)
+    )
+    df['es_exito'] = df['resultado_norm'].isin(RESULTADOS_CONTACTO_VALIDO) | df['es_promesa']
+
+    grupos = ['DNI', 'Telefono']
+
+    fallos = df[df['es_fallo']].copy()
+    if not fallos.empty:
+        stats_fallos = fallos.groupby(grupos).agg(
+            total_fallos=('es_fallo', 'size'),
+            ultima_fecha_fallo=('Fecha_de_gestion', 'max'),
+        ).reset_index()
+    else:
+        stats_fallos = pd.DataFrame(columns=grupos + ['total_fallos', 'ultima_fecha_fallo'])
+
+    exitos = df[df['es_exito']].copy()
+    if not exitos.empty:
+        exitos['fecha_exito_evento'] = exitos['Fecha_de_gestion']
+        exitos.loc[~exitos['es_exito'], 'fecha_exito_evento'] = pd.NaT
+        exitos['fecha_promesa_evento'] = exitos['fecha_promesa_norm'].where(exitos['es_promesa'])
+        exitos['fecha_proteccion_evento'] = exitos[
+            ['fecha_exito_evento', 'fecha_promesa_evento']
+        ].max(axis=1)
+
+        stats_exitos = exitos.groupby(grupos).agg(
+            ultima_fecha_exito=('Fecha_de_gestion', 'max'),
+            ultima_fecha_promesa=('fecha_promesa_evento', 'max'),
+            fecha_ultima_proteccion=('fecha_proteccion_evento', 'max'),
+            tiene_promesa=('es_promesa', 'max'),
+        ).reset_index()
+
+        ultimos = exitos.sort_values(
+            grupos + ['fecha_proteccion_evento', 'Fecha_de_gestion'],
+            ascending=[True, True, False, False],
+        ).drop_duplicates(grupos)
+
+        ultimos = ultimos[grupos + ['resultado_norm', 'Resultado_Gestion_norm']].rename(
+            columns={
+                'resultado_norm': 'mejor_resultado',
+                'Resultado_Gestion_norm': 'motivo_proteccion',
+            }
+        )
+
+        stats_exitos = pd.merge(stats_exitos, ultimos, on=grupos, how='left')
+    else:
+        stats_exitos = pd.DataFrame(
+            columns=grupos + [
+                'ultima_fecha_exito',
+                'ultima_fecha_promesa',
+                'fecha_ultima_proteccion',
+                'tiene_promesa',
+                'mejor_resultado',
+                'motivo_proteccion',
+            ]
+        )
+
+    resumen = pd.merge(stats_fallos, stats_exitos, on=grupos, how='outer')
+
+    if not fallos.empty:
+        fallos = pd.merge(
+            fallos,
+            resumen[grupos + ['fecha_ultima_proteccion']],
+            on=grupos,
+            how='left',
+        )
+
+        fallos['es_fallo_posterior_proteccion'] = (
+            fallos['fecha_ultima_proteccion'].isna() |
+            (fallos['Fecha_de_gestion'] > fallos['fecha_ultima_proteccion'])
+        )
+
+        fallos_posteriores = fallos[fallos['es_fallo_posterior_proteccion']].groupby(grupos).agg(
+            fallos_posteriores_proteccion=('es_fallo_posterior_proteccion', 'size'),
+            ultima_fecha_fallo_posterior=('Fecha_de_gestion', 'max'),
+        ).reset_index()
+    else:
+        fallos_posteriores = pd.DataFrame(
+            columns=grupos + ['fallos_posteriores_proteccion', 'ultima_fecha_fallo_posterior']
+        )
+
+    resumen = pd.merge(resumen, fallos_posteriores, on=grupos, how='left')
+
+    for col in ['total_fallos', 'fallos_posteriores_proteccion']:
+        resumen[col] = resumen[col].fillna(0).astype(int)
+
+    for col in [
+        'ultima_fecha_fallo',
+        'ultima_fecha_fallo_posterior',
+        'ultima_fecha_exito',
+        'ultima_fecha_promesa',
+        'fecha_ultima_proteccion',
+    ]:
+        resumen[col] = pd.to_datetime(resumen[col], errors='coerce')
+
+    resumen['tiene_promesa'] = resumen['tiene_promesa'].astype('boolean').fillna(False).astype(bool)
+    resumen['mejor_resultado'] = resumen['mejor_resultado'].fillna('')
+    resumen['motivo_proteccion'] = resumen['motivo_proteccion'].fillna('')
+
+    return resumen[cols_salida].copy()
 
 
 def validar_telefono_peru(row):
